@@ -1,0 +1,49 @@
+name: super_shine_cargo
+description: Super Shine Cargo Service - Mobile App
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # HTTP client
+  dio: ^5.4.0
+
+  # Secure token storage
+  flutter_secure_storage: ^9.0.0
+
+  # State management
+  provider: ^6.1.2
+
+  # File handling
+  path_provider: ^2.1.2
+
+  # PDF preview & sharing
+  printing: ^5.13.0
+
+  # Icons
+  cupertino_icons: ^1.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - logo.png
+    - logo_adaptive.png
+
+flutter_launcher_icons:
+  android: "ic_launcher"
+  ios: false
+  min_sdk_android: 21
+  image_path: "logo_adaptive.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "logo_adaptive.png"
