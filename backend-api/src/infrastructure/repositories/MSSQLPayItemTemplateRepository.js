@@ -1,4 +1,3 @@
-const sql = require('mssql');
 const IPayItemTemplateRepository = require('../../domain/repositories/IPayItemTemplateRepository');
 
 class MSSQLPayItemTemplateRepository extends IPayItemTemplateRepository {
@@ -11,29 +10,19 @@ class MSSQLPayItemTemplateRepository extends IPayItemTemplateRepository {
   async getByCategory(shipmentCategory) {
     try {
       const pool = await this.getConnection();
-      const result = await pool.request()
-        .input('shipmentCategory', this.sql.NVarChar, shipmentCategory)
-        .query(`
-          SELECT templateId, shipmentCategory, itemName, itemOrder, isActive, createdDate
-          FROM PayItemTemplates
-          WHERE shipmentCategory = @shipmentCategory AND isActive = 1
-          ORDER BY itemOrder ASC
-        `);
 
-      // Backward compatibility: if templates were previously stored under "Vehicle"
-      // and the caller asks for one of the new vehicle categories, fall back.
+      const result = await pool.request()
+        .input('ShipmentCategory', this.sql.NVarChar(100), shipmentCategory)
+        .execute('usp_GetPayItemTemplatesByCategory');
+
+      // Backward compatibility: fall back to legacy 'Vehicle' category if new sub-type has no templates
       const isNewVehicleCategory = shipmentCategory === 'Vehicle - Personal' || shipmentCategory === 'Vehicle - Company';
       if (result.recordset.length === 0 && isNewVehicleCategory) {
-        const fallbackResult = await pool.request()
-          .input('legacyVehicleCategory', this.sql.NVarChar, 'Vehicle')
-          .query(`
-            SELECT templateId, shipmentCategory, itemName, itemOrder, isActive, createdDate
-            FROM PayItemTemplates
-            WHERE shipmentCategory = @legacyVehicleCategory AND isActive = 1
-            ORDER BY itemOrder ASC
-          `);
+        const fallback = await pool.request()
+          .input('ShipmentCategory', this.sql.NVarChar(100), 'Vehicle')
+          .execute('usp_GetPayItemTemplatesByCategory');
 
-        return fallbackResult.recordset;
+        return fallback.recordset;
       }
 
       return result.recordset;
@@ -46,23 +35,17 @@ class MSSQLPayItemTemplateRepository extends IPayItemTemplateRepository {
   async getAll() {
     try {
       const pool = await this.getConnection();
+
       const result = await pool.request()
-        .query(`
-          SELECT templateId, shipmentCategory, itemName, itemOrder, isActive, createdDate
-          FROM PayItemTemplates
-          WHERE isActive = 1
-          ORDER BY shipmentCategory, itemOrder ASC
-        `);
-      
+        .execute('usp_GetAllPayItemTemplates');
+
       // Group by category
       const grouped = {};
       result.recordset.forEach(item => {
-        if (!grouped[item.shipmentCategory]) {
-          grouped[item.shipmentCategory] = [];
-        }
+        if (!grouped[item.shipmentCategory]) grouped[item.shipmentCategory] = [];
         grouped[item.shipmentCategory].push(item);
       });
-      
+
       return grouped;
     } catch (error) {
       console.error('Error fetching all pay item templates:', error);
@@ -73,28 +56,12 @@ class MSSQLPayItemTemplateRepository extends IPayItemTemplateRepository {
   async create(templateData) {
     try {
       const pool = await this.getConnection();
-      
-      // Get max order for this category
-      const maxOrderResult = await pool.request()
-        .input('shipmentCategory', this.sql.NVarChar, templateData.shipmentCategory)
-        .query(`
-          SELECT ISNULL(MAX(itemOrder), 0) as maxOrder
-          FROM PayItemTemplates
-          WHERE shipmentCategory = @shipmentCategory
-        `);
-      
-      const nextOrder = maxOrderResult.recordset[0].maxOrder + 1;
-      
+
       const result = await pool.request()
-        .input('shipmentCategory', this.sql.NVarChar, templateData.shipmentCategory)
-        .input('itemName', this.sql.NVarChar, templateData.itemName)
-        .input('itemOrder', this.sql.Int, nextOrder)
-        .query(`
-          INSERT INTO PayItemTemplates (shipmentCategory, itemName, itemOrder)
-          OUTPUT INSERTED.*
-          VALUES (@shipmentCategory, @itemName, @itemOrder)
-        `);
-      
+        .input('ShipmentCategory', this.sql.NVarChar(100), templateData.shipmentCategory)
+        .input('ItemName',         this.sql.NVarChar(500), templateData.itemName)
+        .execute('usp_CreatePayItemTemplate');
+
       return result.recordset[0];
     } catch (error) {
       console.error('Error creating pay item template:', error);
@@ -105,16 +72,12 @@ class MSSQLPayItemTemplateRepository extends IPayItemTemplateRepository {
   async update(templateId, templateData) {
     try {
       const pool = await this.getConnection();
+
       const result = await pool.request()
-        .input('templateId', this.sql.Int, templateId)
-        .input('itemName', this.sql.NVarChar, templateData.itemName)
-        .query(`
-          UPDATE PayItemTemplates
-          SET itemName = @itemName
-          OUTPUT INSERTED.*
-          WHERE templateId = @templateId
-        `);
-      
+        .input('TemplateId', this.sql.Int,          templateId)
+        .input('ItemName',   this.sql.NVarChar(500), templateData.itemName)
+        .execute('usp_UpdatePayItemTemplate');
+
       return result.recordset[0];
     } catch (error) {
       console.error('Error updating pay item template:', error);
@@ -125,14 +88,11 @@ class MSSQLPayItemTemplateRepository extends IPayItemTemplateRepository {
   async delete(templateId) {
     try {
       const pool = await this.getConnection();
+
       await pool.request()
-        .input('templateId', this.sql.Int, templateId)
-        .query(`
-          UPDATE PayItemTemplates
-          SET isActive = 0
-          WHERE templateId = @templateId
-        `);
-      
+        .input('TemplateId', this.sql.Int, templateId)
+        .execute('usp_DeletePayItemTemplate');
+
       return { success: true };
     } catch (error) {
       console.error('Error deleting pay item template:', error);
@@ -144,21 +104,16 @@ class MSSQLPayItemTemplateRepository extends IPayItemTemplateRepository {
     try {
       const pool = await this.getConnection();
       const transaction = new this.sql.Transaction(pool);
-      
+
       await transaction.begin();
-      
       try {
         for (let i = 0; i < items.length; i++) {
           await transaction.request()
-            .input('templateId', this.sql.Int, items[i].templateId)
-            .input('itemOrder', this.sql.Int, i + 1)
-            .query(`
-              UPDATE PayItemTemplates
-              SET itemOrder = @itemOrder
-              WHERE templateId = @templateId
-            `);
+            .input('TemplateId', this.sql.Int, items[i].templateId)
+            .input('ItemOrder',  this.sql.Int, i + 1)
+            .execute('usp_ReorderPayItemTemplate');
         }
-        
+
         await transaction.commit();
         return { success: true };
       } catch (error) {

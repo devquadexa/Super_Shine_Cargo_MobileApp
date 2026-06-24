@@ -1,8 +1,10 @@
 /**
  * MSSQL User Repository Implementation
+ * All database operations are delegated to stored procedures.
  */
 const IUserRepository = require('../../domain/repositories/IUserRepository');
 const User = require('../../domain/entities/User');
+const bcrypt = require('bcryptjs');
 
 class MSSQLUserRepository extends IUserRepository {
   constructor(dbConnection, sql) {
@@ -13,186 +15,148 @@ class MSSQLUserRepository extends IUserRepository {
 
   async create(user) {
     const pool = await this.db();
-    
+
     await pool.request()
-      .input('userId', this.sql.VarChar, user.userId)
-      .input('username', this.sql.VarChar, user.username)
-      .input('password', this.sql.VarChar, user.password)
-      .input('fullName', this.sql.VarChar, user.fullName)
-      .input('role', this.sql.VarChar, user.role)
-      .input('email', this.sql.VarChar, user.email)
-      .input('createdDate', this.sql.DateTime, user.createdDate)
-      .input('isActive', this.sql.Bit, user.isActive)
-      .input('isTemporaryPassword', this.sql.Bit, user.isTemporaryPassword || false)
-      .input('passwordResetRequired', this.sql.Bit, user.passwordResetRequired || false)
-      .input('lastPasswordChange', this.sql.DateTime, user.lastPasswordChange || new Date())
-      .query(`
-        INSERT INTO Users (
-          UserId, Username, Password, FullName, Role, Email, CreatedDate, IsActive,
-          isTemporaryPassword, passwordResetRequired, lastPasswordChange
-        )
-        VALUES (
-          @userId, @username, @password, @fullName, @role, @email, @createdDate, @isActive,
-          @isTemporaryPassword, @passwordResetRequired, @lastPasswordChange
-        )
-      `);
-    
+      .input('UserId',               this.sql.VarChar(50),  user.userId)
+      .input('Username',             this.sql.VarChar(100), user.username)
+      .input('Password',             this.sql.VarChar(255), user.password)
+      .input('FullName',             this.sql.VarChar(255), user.fullName)
+      .input('Role',                 this.sql.VarChar(50),  user.role)
+      .input('Email',                this.sql.VarChar(255), user.email)
+      .input('CreatedDate',          this.sql.DateTime,     user.createdDate)
+      .input('IsActive',             this.sql.Bit,          user.isActive)
+      .input('IsTemporaryPassword',  this.sql.Bit,          user.isTemporaryPassword  || false)
+      .input('PasswordResetRequired',this.sql.Bit,          user.passwordResetRequired || false)
+      .input('LastPasswordChange',   this.sql.DateTime,     user.lastPasswordChange   || new Date())
+      .execute('usp_CreateUser');
+
     return user;
   }
 
   async findById(userId) {
     const pool = await this.db();
-    
+
     const result = await pool.request()
-      .input('userId', this.sql.VarChar, userId)
-      .query('SELECT * FROM Users WHERE UserId = @userId AND IsActive = 1');
-    
-    if (result.recordset.length === 0) {
-      return null;
-    }
-    
+      .input('UserId', this.sql.VarChar(50), userId)
+      .execute('usp_GetUserById');
+
+    if (result.recordset.length === 0) return null;
     return this.mapToEntity(result.recordset[0]);
   }
 
   async findByUsername(username) {
     const pool = await this.db();
-    
+
     const result = await pool.request()
-      .input('username', this.sql.VarChar, username)
-      .query('SELECT * FROM Users WHERE Username = @username AND IsActive = 1');
-    
-    if (result.recordset.length === 0) {
-      return null;
-    }
-    
+      .input('Username', this.sql.VarChar(100), username)
+      .execute('usp_GetUserByUsername');
+
+    if (result.recordset.length === 0) return null;
     return this.mapToEntity(result.recordset[0]);
   }
 
-  async findAll(filters = {}) {
+  async findAll() {
     const pool = await this.db();
-    
+
     const result = await pool.request()
-      .query('SELECT * FROM Users WHERE IsActive = 1 ORDER BY UserId ASC');
-    
+      .execute('usp_GetAllUsers');
+
     return result.recordset.map(row => this.mapToEntity(row));
   }
 
   async update(userId, user) {
     const pool = await this.db();
-    
+
     await pool.request()
-      .input('userId', this.sql.VarChar, userId)
-      .input('fullName', this.sql.VarChar, user.fullName)
-      .input('role', this.sql.VarChar, user.role)
-      .input('email', this.sql.VarChar, user.email)
-      .query(`
-        UPDATE Users 
-        SET FullName = @fullName, Role = @role, Email = @email
-        WHERE UserId = @userId
-      `);
-    
+      .input('UserId',   this.sql.VarChar(50),  userId)
+      .input('FullName', this.sql.VarChar(255), user.fullName)
+      .input('Role',     this.sql.VarChar(50),  user.role)
+      .input('Email',    this.sql.VarChar(255), user.email)
+      .execute('usp_UpdateUser');
+
     return user;
   }
 
   async delete(userId) {
     const pool = await this.db();
-    
+
     await pool.request()
-      .input('userId', this.sql.VarChar, userId)
-      .query('UPDATE Users SET IsActive = 0 WHERE UserId = @userId');
-    
+      .input('UserId', this.sql.VarChar(50), userId)
+      .execute('usp_DeleteUser');
+
     return true;
   }
 
   async authenticate(username, password) {
     const pool = await this.db();
-    
-    // Get user by username
+
     const result = await pool.request()
-      .input('username', this.sql.VarChar, username)
-      .query('SELECT * FROM Users WHERE Username = @username AND IsActive = 1');
-    
-    if (result.recordset.length === 0) {
-      return null;
-    }
-    
+      .input('UserName', this.sql.VarChar(100), username)
+      .execute('usp_AuthenticateUser');
+
+    if (result.recordset.length === 0) return null;
+
     const user = this.mapToEntity(result.recordset[0]);
-    const bcrypt = require('bcryptjs');
-    
-    // Check if password is hashed (bcrypt hashes start with $2a$, $2b$, or $2y$)
-    const isHashedPassword = user.password && user.password.startsWith('$2');
-    
-    let isValidPassword = false;
-    
-    if (isHashedPassword) {
-      // Compare using bcrypt for hashed passwords
-      isValidPassword = await bcrypt.compare(password, user.password);
+
+    // Bcrypt hashes always start with $2a$, $2b$, or $2y$
+    const isHashed = user.password && user.password.startsWith('$2');
+    let isValid = false;
+
+    if (isHashed) {
+      isValid = await bcrypt.compare(password, user.password);
     } else {
-      // Direct comparison for plain text passwords (legacy users)
-      isValidPassword = (password === user.password);
-      
-      // If login successful with plain text, automatically hash the password
-      if (isValidPassword) {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        await pool.request()
-          .input('userId', this.sql.VarChar, user.userId)
-          .input('password', this.sql.VarChar, hashedPassword)
-          .query('UPDATE Users SET Password = @password WHERE UserId = @userId');
-        
-        console.log(`✅ Migrated password to bcrypt for user: ${username}`);
+      // Legacy plain-text comparison
+      isValid = (password === user.password);
+
+      // Non-blocking upgrade: hash and persist on successful plain-text login
+      if (isValid) {
+        try {
+          const hashed = await bcrypt.hash(password, 10);
+          await this.updatePassword(user.userId, hashed, false, false);
+          console.log(`✅ Migrated password to bcrypt for user: ${username}`);
+        } catch (err) {
+          console.error(`⚠️ Failed to migrate password for user: ${username}`, err);
+        }
       }
     }
-    
-    if (!isValidPassword) {
-      return null;
-    }
-    
+
+    if (!isValid) return null;
     return user;
   }
 
   async generateNextId() {
     const pool = await this.db();
-    
+
     const result = await pool.request()
-      .query('SELECT MAX(CAST(SUBSTRING(UserId, 5, 4) AS INT)) as maxId FROM Users');
-    
-    const nextId = (result.recordset[0].maxId || 0) + 1;
-    return `USER${String(nextId).padStart(4, '0')}`;
+      .execute('usp_GenerateNextUserId');
+
+    return result.recordset[0].NextUserId;
   }
 
   async updatePassword(userId, hashedPassword, isTemporaryPassword = false, passwordResetRequired = false) {
     const pool = await this.db();
-    
+
     await pool.request()
-      .input('userId', this.sql.VarChar, userId)
-      .input('password', this.sql.VarChar, hashedPassword)
-      .input('isTemporaryPassword', this.sql.Bit, isTemporaryPassword)
-      .input('passwordResetRequired', this.sql.Bit, passwordResetRequired)
-      .input('lastPasswordChange', this.sql.DateTime, new Date())
-      .query(`
-        UPDATE Users 
-        SET 
-          Password = @password,
-          isTemporaryPassword = @isTemporaryPassword,
-          passwordResetRequired = @passwordResetRequired,
-          lastPasswordChange = @lastPasswordChange
-        WHERE UserId = @userId
-      `);
+      .input('UserId',               this.sql.VarChar(50),  userId)
+      .input('Password',             this.sql.VarChar(255), hashedPassword)
+      .input('IsTemporaryPassword',  this.sql.Bit,          isTemporaryPassword)
+      .input('PasswordResetRequired',this.sql.Bit,          passwordResetRequired)
+      .execute('usp_UpdateUserPassword');
   }
 
   mapToEntity(row) {
     return new User({
-      userId: row.UserId,
-      username: row.Username,
-      password: row.Password,
-      fullName: row.FullName,
-      role: row.Role,
-      email: row.Email,
-      createdDate: row.CreatedDate,
-      isActive: row.IsActive,
-      isTemporaryPassword: row.isTemporaryPassword,
+      userId:                row.UserId,
+      username:              row.Username,
+      password:              row.Password,
+      fullName:              row.FullName,
+      role:                  row.Role,
+      email:                 row.Email,
+      createdDate:           row.CreatedDate,
+      isActive:              row.IsActive,
+      isTemporaryPassword:   row.isTemporaryPassword,
       passwordResetRequired: row.passwordResetRequired,
-      lastPasswordChange: row.lastPasswordChange
+      lastPasswordChange:    row.lastPasswordChange
     });
   }
 }

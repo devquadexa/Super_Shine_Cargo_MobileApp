@@ -1,6 +1,6 @@
 /**
  * MSSQL Cash Balance Settlement Repository Implementation
- * Handles all database operations for Cash Balance Settlements
+ * All database operations are delegated to stored procedures.
  */
 const CashBalanceSettlement = require('../../domain/entities/CashBalanceSettlement');
 
@@ -12,286 +12,178 @@ class MSSQLCashBalanceSettlementRepository {
 
   async create(settlement) {
     const pool = await this.db();
-    
-    const relatedAssignmentsJson = JSON.stringify(settlement.relatedAssignments || []);
-    
+
     await pool.request()
-      .input('settlementId', this.sql.VarChar, settlement.settlementId)
-      .input('userId', this.sql.VarChar, settlement.userId)
-      .input('userName', this.sql.NVarChar, settlement.userName)
-      .input('managerId', this.sql.VarChar, settlement.managerId)
-      .input('managerName', this.sql.NVarChar, settlement.managerName)
-      .input('settlementType', this.sql.NVarChar, settlement.settlementType)
-      .input('amount', this.sql.Decimal(18, 2), settlement.amount)
-      .input('status', this.sql.NVarChar, settlement.status)
-      .input('requestDate', this.sql.DateTime, settlement.requestDate)
-      .input('notes', this.sql.NVarChar, settlement.notes)
-      .input('relatedAssignments', this.sql.NVarChar, relatedAssignmentsJson)
-      .input('createdBy', this.sql.VarChar, settlement.createdBy)
-      .input('createdDate', this.sql.DateTime, settlement.createdDate)
-      .query(`
-        INSERT INTO CashBalanceSettlements (
-          settlementId, userId, userName, managerId, managerName, 
-          settlementType, amount, status, requestDate, notes, 
-          relatedAssignments, createdBy, createdDate
-        )
-        VALUES (
-          @settlementId, @userId, @userName, @managerId, @managerName,
-          @settlementType, @amount, @status, @requestDate, @notes,
-          @relatedAssignments, @createdBy, @createdDate
-        )
-      `);
-    
+      .input('SettlementId',       this.sql.VarChar(50),    settlement.settlementId)
+      .input('UserId',             this.sql.VarChar(50),    settlement.userId)
+      .input('UserName',           this.sql.NVarChar(255),  settlement.userName)
+      .input('ManagerId',          this.sql.VarChar(50),    settlement.managerId)
+      .input('ManagerName',        this.sql.NVarChar(255),  settlement.managerName)
+      .input('SettlementType',     this.sql.NVarChar(100),  settlement.settlementType)
+      .input('Amount',             this.sql.Decimal(18, 2), settlement.amount)
+      .input('Status',             this.sql.NVarChar(50),   settlement.status)
+      .input('RequestDate',        this.sql.DateTime,       settlement.requestDate)
+      .input('Notes',              this.sql.NVarChar(4000), settlement.notes)
+      .input('RelatedAssignments', this.sql.NVarChar(4000), JSON.stringify(settlement.relatedAssignments || []))
+      .input('CreatedBy',          this.sql.VarChar(50),    settlement.createdBy)
+      .input('CreatedDate',        this.sql.DateTime,       settlement.createdDate)
+      .execute('usp_CreateCashBalanceSettlement');
+
     return settlement;
   }
 
   async findById(settlementId) {
     const pool = await this.db();
+
     const result = await pool.request()
-      .input('settlementId', this.sql.VarChar, settlementId)
-      .query('SELECT * FROM CashBalanceSettlements WHERE settlementId = @settlementId');
-    
+      .input('SettlementId', this.sql.VarChar(50), settlementId)
+      .execute('usp_GetCashBalanceSettlementById');
+
     return result.recordset[0] ? this.mapToEntity(result.recordset[0]) : null;
   }
 
   async findAll(filters = {}) {
     const pool = await this.db();
-    let query = `
-      SELECT cbs.*,
-        (
-          SELECT TOP 1 pa.jobId 
-          FROM PettyCashAssignments pa 
-          WHERE pa.assignmentId = (
-            SELECT TOP 1 value 
-            FROM OPENJSON(cbs.relatedAssignments) 
-            ORDER BY [key]
-          )
-        ) as jobId,
-        (
-          SELECT TOP 1 j.CUSDECNumber
-          FROM PettyCashAssignments pa
-          JOIN Jobs j ON pa.jobId = j.JobId
-          WHERE pa.assignmentId = (
-            SELECT TOP 1 value 
-            FROM OPENJSON(cbs.relatedAssignments) 
-            ORDER BY [key]
-          )
-        ) as cusdecNumber
-      FROM CashBalanceSettlements cbs
-      WHERE 1=1`;
-    const request = pool.request();
-    
-    if (filters.userId) {
-      query += ' AND cbs.userId = @userId';
-      request.input('userId', this.sql.VarChar, filters.userId);
-    }
-    
-    if (filters.managerId) {
-      query += ' AND cbs.managerId = @managerId';
-      request.input('managerId', this.sql.VarChar, filters.managerId);
-    }
-    
-    if (filters.status) {
-      query += ' AND cbs.status = @status';
-      request.input('status', this.sql.NVarChar, filters.status);
-    }
-    
-    if (filters.settlementType) {
-      query += ' AND cbs.settlementType = @settlementType';
-      request.input('settlementType', this.sql.NVarChar, filters.settlementType);
-    }
-    
-    query += ' ORDER BY cbs.requestDate DESC';
-    
-    const result = await request.query(query);
+
+    const result = await pool.request()
+      .input('UserId',         this.sql.VarChar(50),   filters.userId         || null)
+      .input('ManagerId',      this.sql.VarChar(50),   filters.managerId      || null)
+      .input('Status',         this.sql.NVarChar(50),  filters.status         || null)
+      .input('SettlementType', this.sql.NVarChar(100), filters.settlementType || null)
+      .execute('usp_GetAllCashBalanceSettlements');
+
     return result.recordset.map(row => this.mapToEntity(row));
   }
 
   async findByUser(userId) {
     const pool = await this.db();
+
     const result = await pool.request()
-      .input('userId', this.sql.VarChar, userId)
-      .query('SELECT * FROM CashBalanceSettlements WHERE userId = @userId ORDER BY requestDate DESC');
-    
+      .input('UserId', this.sql.VarChar(50), userId)
+      .execute('usp_GetCashBalanceSettlementsByUser');
+
     return result.recordset.map(row => this.mapToEntity(row));
   }
 
   async findByManager(managerId) {
     const pool = await this.db();
+
     const result = await pool.request()
-      .input('managerId', this.sql.VarChar, managerId)
-      .query('SELECT * FROM CashBalanceSettlements WHERE managerId = @managerId ORDER BY requestDate DESC');
-    
+      .input('ManagerId', this.sql.VarChar(50), managerId)
+      .execute('usp_GetCashBalanceSettlementsByManager');
+
     return result.recordset.map(row => this.mapToEntity(row));
   }
 
   async findPendingSettlements() {
     const pool = await this.db();
+
     const result = await pool.request()
-      .query("SELECT * FROM CashBalanceSettlements WHERE status = 'PENDING' ORDER BY requestDate ASC");
-    
+      .execute('usp_GetPendingCashBalanceSettlements');
+
     return result.recordset.map(row => this.mapToEntity(row));
   }
 
   async findApprovedSettlements() {
     const pool = await this.db();
+
     const result = await pool.request()
-      .query("SELECT * FROM CashBalanceSettlements WHERE status = 'APPROVED' ORDER BY approvedDate ASC");
-    
+      .execute('usp_GetApprovedCashBalanceSettlements');
+
     return result.recordset.map(row => this.mapToEntity(row));
   }
 
   async findRejectedSettlements() {
     const pool = await this.db();
+
     const result = await pool.request()
-      .query("SELECT * FROM CashBalanceSettlements WHERE status = 'REJECTED' ORDER BY updatedDate DESC");
-    
+      .execute('usp_GetRejectedCashBalanceSettlements');
+
     return result.recordset.map(row => this.mapToEntity(row));
   }
 
   async update(settlementId, settlement) {
     const pool = await this.db();
-    
-    const request = pool.request()
-      .input('settlementId', this.sql.VarChar, settlementId);
-    
-    const updates = [];
-    
-    if (settlement.managerId !== undefined) {
-      request.input('managerId', this.sql.VarChar, settlement.managerId);
-      updates.push('managerId = @managerId');
-    }
-    
-    if (settlement.managerName !== undefined) {
-      request.input('managerName', this.sql.NVarChar, settlement.managerName);
-      updates.push('managerName = @managerName');
-    }
-    
-    if (settlement.status !== undefined) {
-      request.input('status', this.sql.NVarChar, settlement.status);
-      updates.push('status = @status');
-    }
-    
-    if (settlement.approvedDate !== undefined) {
-      request.input('approvedDate', this.sql.DateTime, settlement.approvedDate);
-      updates.push('approvedDate = @approvedDate');
-    }
-    
-    if (settlement.completedDate !== undefined) {
-      request.input('completedDate', this.sql.DateTime, settlement.completedDate);
-      updates.push('completedDate = @completedDate');
-    }
-    
-    if (settlement.managerNotes !== undefined) {
-      request.input('managerNotes', this.sql.NVarChar, settlement.managerNotes);
-      updates.push('managerNotes = @managerNotes');
-    }
-    
-    if (settlement.updatedBy !== undefined) {
-      request.input('updatedBy', this.sql.VarChar, settlement.updatedBy);
-      updates.push('updatedBy = @updatedBy');
-    }
-    
-    if (settlement.updatedDate !== undefined) {
-      request.input('updatedDate', this.sql.DateTime, settlement.updatedDate);
-      updates.push('updatedDate = @updatedDate');
-    }
-    
-    if (updates.length > 0) {
-      await request.query(`
-        UPDATE CashBalanceSettlements 
-        SET ${updates.join(', ')}
-        WHERE settlementId = @settlementId
-      `);
-    }
-    
-    return await this.findById(settlementId);
+
+    await pool.request()
+      .input('SettlementId',   this.sql.VarChar(50),    settlementId)
+      .input('ManagerId',      this.sql.VarChar(50),    settlement.managerId      ?? null)
+      .input('ManagerName',    this.sql.NVarChar(255),  settlement.managerName    ?? null)
+      .input('Status',         this.sql.NVarChar(50),   settlement.status         ?? null)
+      .input('ApprovedDate',   this.sql.DateTime,       settlement.approvedDate   ?? null)
+      .input('CompletedDate',  this.sql.DateTime,       settlement.completedDate  ?? null)
+      .input('ManagerNotes',   this.sql.NVarChar(4000), settlement.managerNotes   ?? null)
+      .input('UpdatedBy',      this.sql.VarChar(50),    settlement.updatedBy      ?? null)
+      .input('UpdatedDate',    this.sql.DateTime,       settlement.updatedDate    ?? null)
+      .execute('usp_UpdateCashBalanceSettlement');
+
+    return this.findById(settlementId);
   }
 
   async delete(settlementId) {
     const pool = await this.db();
-    
+
     await pool.request()
-      .input('settlementId', this.sql.VarChar, settlementId)
-      .query('DELETE FROM CashBalanceSettlements WHERE settlementId = @settlementId');
+      .input('SettlementId', this.sql.VarChar(50), settlementId)
+      .execute('usp_DeleteCashBalanceSettlement');
   }
 
   async generateNextId() {
     const pool = await this.db();
+
     const result = await pool.request()
-      .query('SELECT MAX(CAST(SUBSTRING(settlementId, 4, 6) AS INT)) as MaxId FROM CashBalanceSettlements WHERE settlementId LIKE \'CBS%\'');
-    
-    const nextId = (result.recordset[0].MaxId || 0) + 1;
-    return `CBS${String(nextId).padStart(6, '0')}`;
+      .execute('usp_GenerateNextCashBalanceSettlementId');
+
+    return result.recordset[0].NextSettlementId;
   }
 
   async getSettlementsSummary() {
     const pool = await this.db();
+
     const result = await pool.request()
-      .query(`
-        SELECT 
-          status,
-          settlementType,
-          COUNT(*) as count,
-          SUM(amount) as totalAmount
-        FROM CashBalanceSettlements 
-        GROUP BY status, settlementType
-        ORDER BY status, settlementType
-      `);
-    
+      .execute('usp_GetCashBalanceSettlementsSummary');
+
     return result.recordset;
   }
 
   async getUserSettlementsSummary(userId) {
     const pool = await this.db();
+
     const result = await pool.request()
-      .input('userId', this.sql.VarChar, userId)
-      .query(`
-        SELECT 
-          status,
-          settlementType,
-          COUNT(*) as count,
-          SUM(amount) as totalAmount
-        FROM CashBalanceSettlements 
-        WHERE userId = @userId
-        GROUP BY status, settlementType
-        ORDER BY status, settlementType
-      `);
-    
+      .input('UserId', this.sql.VarChar(50), userId)
+      .execute('usp_GetUserCashBalanceSettlementsSummary');
+
     return result.recordset;
   }
 
   mapToEntity(row) {
     let relatedAssignments = [];
     if (row.relatedAssignments) {
-      try {
-        relatedAssignments = JSON.parse(row.relatedAssignments);
-      } catch (e) {
-        console.log('Error parsing relatedAssignments JSON:', e.message);
-      }
+      try { relatedAssignments = JSON.parse(row.relatedAssignments); }
+      catch (e) { console.log('Error parsing relatedAssignments JSON:', e.message); }
     }
 
     const entity = new CashBalanceSettlement({
-      settlementId: row.settlementId,
-      userId: row.userId,
-      userName: row.userName,
-      managerId: row.managerId,
-      managerName: row.managerName,
-      settlementType: row.settlementType,
-      amount: row.amount,
-      status: row.status,
-      requestDate: row.requestDate,
-      approvedDate: row.approvedDate,
-      completedDate: row.completedDate,
-      notes: row.notes,
-      managerNotes: row.managerNotes,
-      relatedAssignments: relatedAssignments,
-      createdBy: row.createdBy,
-      createdDate: row.createdDate,
-      updatedBy: row.updatedBy,
-      updatedDate: row.updatedDate
+      settlementId:       row.settlementId,
+      userId:             row.userId,
+      userName:           row.userName,
+      managerId:          row.managerId,
+      managerName:        row.managerName,
+      settlementType:     row.settlementType,
+      amount:             row.amount,
+      status:             row.status,
+      requestDate:        row.requestDate,
+      approvedDate:       row.approvedDate,
+      completedDate:      row.completedDate,
+      notes:              row.notes,
+      managerNotes:       row.managerNotes,
+      relatedAssignments,
+      createdBy:          row.createdBy,
+      createdDate:        row.createdDate,
+      updatedBy:          row.updatedBy,
+      updatedDate:        row.updatedDate,
     });
-    entity.jobId = row.jobId || null;
+    entity.jobId        = row.jobId        || null;
     entity.cusdecNumber = row.cusdecNumber || null;
     return entity;
   }

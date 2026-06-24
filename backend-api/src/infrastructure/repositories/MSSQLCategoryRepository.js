@@ -1,5 +1,6 @@
 /**
  * MSSQL Category Repository Implementation
+ * All database operations are delegated to stored procedures.
  */
 const ICategoryRepository = require('../../domain/repositories/ICategoryRepository');
 const Category = require('../../domain/entities/Category');
@@ -13,81 +14,66 @@ class MSSQLCategoryRepository extends ICategoryRepository {
 
   async findAll() {
     const pool = await this.db();
-    
+
     const result = await pool.request()
-      .query('SELECT * FROM Categories ORDER BY CategoryName');
-    
+      .execute('usp_GetAllCategories');
+
     return result.recordset.map(row => this.mapToEntity(row));
   }
 
   async findById(categoryId) {
     const pool = await this.db();
-    
+
     const result = await pool.request()
-      .input('categoryId', this.sql.Int, categoryId)
-      .query('SELECT * FROM Categories WHERE CategoryId = @categoryId');
-    
-    if (result.recordset.length === 0) {
-      return null;
-    }
-    
+      .input('CategoryId', this.sql.Int, categoryId)
+      .execute('usp_GetCategoryById');
+
+    if (result.recordset.length === 0) return null;
     return this.mapToEntity(result.recordset[0]);
   }
 
   async findByCustomerId(customerId) {
     const pool = await this.db();
-    
+
     const result = await pool.request()
-      .input('customerId', this.sql.VarChar, customerId)
-      .query(`
-        SELECT c.* 
-        FROM Categories c
-        INNER JOIN CustomerCategories cc ON c.CategoryId = cc.CategoryId
-        WHERE cc.CustomerId = @customerId
-        ORDER BY c.CategoryName
-      `);
-    
+      .input('CustomerId', this.sql.VarChar(50), customerId)
+      .execute('usp_GetCategoriesByCustomer');
+
     return result.recordset.map(row => this.mapToEntity(row));
   }
 
   async assignToCustomer(customerId, categoryIds) {
     const pool = await this.db();
-    
-    // First remove existing categories
+
     await this.removeFromCustomer(customerId);
-    
-    // Then insert new categories
+
     for (const categoryId of categoryIds) {
       await pool.request()
-        .input('customerId', this.sql.VarChar, customerId)
-        .input('categoryId', this.sql.Int, categoryId)
-        .query(`
-          INSERT INTO CustomerCategories (CustomerId, CategoryId)
-          VALUES (@customerId, @categoryId)
-        `);
+        .input('CustomerId', this.sql.VarChar(50), customerId)
+        .input('CategoryId', this.sql.Int,          categoryId)
+        .execute('usp_AssignCategoryToCustomer');
     }
-    
+
     return true;
   }
 
   async removeFromCustomer(customerId) {
     const pool = await this.db();
-    
+
     await pool.request()
-      .input('customerId', this.sql.VarChar, customerId)
-      .query('DELETE FROM CustomerCategories WHERE CustomerId = @customerId');
-    
+      .input('CustomerId', this.sql.VarChar(50), customerId)
+      .execute('usp_RemoveCategoriesFromCustomer');
+
     return true;
   }
 
   mapToEntity(row) {
     return new Category({
-      categoryId: row.CategoryId,
-      categoryName: row.CategoryName
+      categoryId:   row.CategoryId,
+      categoryName: row.CategoryName,
     });
   }
 
-  // Format ID with leading zeros (e.g., 1 -> "000001")
   formatId(id) {
     return String(id).padStart(6, '0');
   }

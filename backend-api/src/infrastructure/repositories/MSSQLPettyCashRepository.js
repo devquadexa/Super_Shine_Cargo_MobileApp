@@ -1,6 +1,6 @@
 /**
  * MSSQL PettyCash Repository Implementation
- * Handles all database operations for PettyCash
+ * All database operations are delegated to stored procedures.
  */
 const IPettyCashRepository = require('../../domain/repositories/IPettyCashRepository');
 const PettyCashEntry = require('../../domain/entities/PettyCashEntry');
@@ -14,118 +14,99 @@ class MSSQLPettyCashRepository extends IPettyCashRepository {
 
   async createEntry(entry) {
     const pool = await this.db();
-    
+
     await pool.request()
-      .input('entryId', this.sql.VarChar, entry.entryId)
-      .input('description', this.sql.VarChar, entry.description)
-      .input('amount', this.sql.Decimal(10, 2), entry.amount)
-      .input('entryType', this.sql.VarChar, entry.entryType)
-      .input('jobId', this.sql.VarChar, entry.jobId || null)
-      .input('createdBy', this.sql.VarChar, entry.createdBy)
-      .input('balanceAfter', this.sql.Decimal(10, 2), entry.balanceAfter)
-      .query(`
-        INSERT INTO PettyCash (EntryId, Description, Amount, EntryType, JobId, CreatedBy, BalanceAfter, Date)
-        VALUES (@entryId, @description, @amount, @entryType, @jobId, @createdBy, @balanceAfter, GETDATE())
-      `);
-    
+      .input('EntryId',      this.sql.VarChar(50),    entry.entryId)
+      .input('Description',  this.sql.VarChar(500),   entry.description)
+      .input('Amount',       this.sql.Decimal(10, 2), entry.amount)
+      .input('EntryType',    this.sql.VarChar(50),    entry.entryType)
+      .input('JobId',        this.sql.VarChar(50),    entry.jobId || null)
+      .input('CreatedBy',    this.sql.VarChar(50),    entry.createdBy)
+      .input('BalanceAfter', this.sql.Decimal(10, 2), entry.balanceAfter)
+      .execute('usp_CreatePettyCashEntry');
+
     return entry;
   }
 
   async findById(entryId) {
     const pool = await this.db();
+
     const result = await pool.request()
-      .input('entryId', this.sql.VarChar, entryId)
-      .query('SELECT * FROM PettyCash WHERE EntryId = @entryId');
-    
+      .input('EntryId', this.sql.VarChar(50), entryId)
+      .execute('usp_GetPettyCashEntryById');
+
     return result.recordset[0] ? this.mapToEntity(result.recordset[0]) : null;
   }
 
   async findAll(filters = {}) {
     const pool = await this.db();
-    let query = 'SELECT * FROM PettyCash';
-    const conditions = [];
-    
-    if (filters.entryType) {
-      conditions.push('EntryType = @entryType');
-    }
-    
-    if (filters.createdBy) {
-      conditions.push('CreatedBy = @createdBy');
-    }
-    
-    if (conditions.length > 0) {
-      query += ' WHERE ' + conditions.join(' AND ');
-    }
-    
-    query += ' ORDER BY Date DESC';
-    
-    const request = pool.request();
-    if (filters.entryType) {
-      request.input('entryType', this.sql.VarChar, filters.entryType);
-    }
-    if (filters.createdBy) {
-      request.input('createdBy', this.sql.VarChar, filters.createdBy);
-    }
-    
-    const result = await request.query(query);
+
+    const result = await pool.request()
+      .input('EntryType',  this.sql.VarChar(50), filters.entryType  || null)
+      .input('CreatedBy',  this.sql.VarChar(50), filters.createdBy  || null)
+      .execute('usp_GetAllPettyCashEntries');
+
     return result.recordset.map(row => this.mapToEntity(row));
   }
 
   async findByJob(jobId) {
     const pool = await this.db();
+
     const result = await pool.request()
-      .input('jobId', this.sql.VarChar, jobId)
-      .query('SELECT * FROM PettyCash WHERE JobId = @jobId ORDER BY Date DESC');
-    
+      .input('JobId', this.sql.VarChar(50), jobId)
+      .execute('usp_GetPettyCashEntriesByJob');
+
     return result.recordset.map(row => this.mapToEntity(row));
   }
 
   async findByUser(userId) {
     const pool = await this.db();
+
     const result = await pool.request()
-      .input('userId', this.sql.VarChar, userId)
-      .query('SELECT * FROM PettyCash WHERE CreatedBy = @userId ORDER BY Date DESC');
-    
+      .input('UserId', this.sql.VarChar(50), userId)
+      .execute('usp_GetPettyCashEntriesByUser');
+
     return result.recordset.map(row => this.mapToEntity(row));
   }
 
   async getBalance() {
     const pool = await this.db();
+
     const result = await pool.request()
-      .query('SELECT Balance FROM PettyCashBalance WHERE Id = 1');
-    
+      .execute('usp_GetPettyCashBalance');
+
     return result.recordset[0]?.Balance || 0;
   }
 
   async updateBalance(amount) {
     const pool = await this.db();
-    
+
     await pool.request()
-      .input('amount', this.sql.Decimal(10, 2), amount)
-      .query('UPDATE PettyCashBalance SET Balance = @amount, LastUpdated = GETDATE() WHERE Id = 1');
-    
+      .input('Amount', this.sql.Decimal(10, 2), amount)
+      .execute('usp_UpdatePettyCashBalance');
+
     return amount;
   }
 
   async generateNextId() {
     const pool = await this.db();
+
     const result = await pool.request()
-      .query('SELECT MAX(CAST(SUBSTRING(EntryId, 3, 4) AS INT)) as MaxId FROM PettyCash');
-    
-    const nextId = (result.recordset[0].MaxId || 0) + 1;
-    return `PC${String(nextId).padStart(4, '0')}`;
+      .execute('usp_GenerateNextPettyCashId');
+
+    return result.recordset[0].NextEntryId;
   }
 
   mapToEntity(row) {
     return new PettyCashEntry({
-      entryId: row.EntryId,
-      description: row.Description,
-      amount: row.Amount,
-      entryType: row.EntryType,
-      jobId: row.JobId,
-      createdBy: row.CreatedBy,
-      date: row.Date,
-      balanceAfter: row.BalanceAfter
+      entryId:      row.EntryId,
+      description:  row.Description,
+      amount:       row.Amount,
+      entryType:    row.EntryType,
+      jobId:        row.JobId,
+      createdBy:    row.CreatedBy,
+      date:         row.Date,
+      balanceAfter: row.BalanceAfter,
     });
   }
 }
