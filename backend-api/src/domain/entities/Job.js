@@ -21,6 +21,7 @@ class Job {
     status = 'Open',
     assignedTo = null, // Legacy single assignment (for backward compatibility)
     assignedUsers = [], // New: Array of assigned users
+    assignments = [], // New: Petty cash assignments for this job
     createdDate = new Date(),
     completedDate = null,
     payItems = [],
@@ -53,6 +54,7 @@ class Job {
     this.status = status;
     this.assignedTo = assignedTo; // Legacy field
     this.assignedUsers = assignedUsers; // New field for multiple users
+    this.assignments = assignments; // New field for petty cash assignments
     this.createdDate = createdDate;
     this.completedDate = completedDate;
     this.payItems = payItems;
@@ -215,6 +217,7 @@ class Job {
       status: this.status,
       assignedTo: this.assignedTo, // Legacy field
       assignedUsers: this.assignedUsers, // New field
+      assignments: this.assignments, // New field for petty cash assignments
       assignedUserCount: this.getAssignedUserCount(),
       createdDate: this.createdDate,
       completedDate: this.completedDate,

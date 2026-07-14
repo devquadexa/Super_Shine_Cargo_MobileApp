@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import 'accounting_screen.dart';
 import 'billing_screen.dart';
 import 'dashboard_screen.dart';
 import 'customers_screen.dart';
 import 'jobs_screen.dart';
 import 'petty_cash_screen.dart';
+import 'user_management_screen.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
@@ -82,6 +84,20 @@ class _MainShellState extends State<MainShell> {
       appBar: AppBar(
         title: Text(titles[_selectedIndex]),
         actions: [
+          if (user?.role == 'Super Admin')
+            IconButton(
+              icon: const Icon(Icons.people_outline),
+              tooltip: 'User Management',
+              onPressed: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const UserManagementScreen())),
+            ),
+          if (user?.role == 'Super Admin')
+            IconButton(
+              icon: const Icon(Icons.analytics_outlined),
+              tooltip: 'Accounting',
+              onPressed: () => Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const AccountingScreen())),
+            ),
           if (_selectedIndex == 0)
             IconButton(
               icon: const Icon(Icons.refresh),

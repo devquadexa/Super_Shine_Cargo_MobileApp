@@ -40,4 +40,27 @@ class AuthService {
       throw Exception(message);
     }
   }
+
+  /// POST /api/auth/register — create a new user (Super Admin only)
+  Future<Map<String, dynamic>> createUser({
+    required String username,
+    required String password,
+    required String fullName,
+    required String email,
+    required String role,
+  }) async {
+    try {
+      final response = await apiClient.post('/auth/register', data: {
+        'username': username,
+        'password': password,
+        'fullName': fullName,
+        'email': email,
+        'role': role,
+      });
+      return response.data as Map<String, dynamic>;
+    } on DioException catch (e) {
+      final message = e.response?.data?['message'] ?? 'Failed to create user.';
+      throw Exception(message);
+    }
+  }
 }

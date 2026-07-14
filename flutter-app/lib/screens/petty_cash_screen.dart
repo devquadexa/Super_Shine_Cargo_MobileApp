@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../api/client.dart';
+import '../api/cash_withdrawal_service.dart';
 import '../providers/auth_provider.dart';
 import 'package:dio/dio.dart';
+import 'expenses_screen.dart';
 
 class PettyCashScreen extends StatefulWidget {
   const PettyCashScreen({super.key});
@@ -14,13 +16,28 @@ class _PettyCashScreenState extends State<PettyCashScreen> with SingleTickerProv
   late TabController _tabCtrl;
   List<Map<String, dynamic>> _assignments = [];
   List<Map<String, dynamic>> _settlements = [];
+  List<Map<String, dynamic>> _withdrawals = [];
   bool _loadingAssignments = true;
   bool _loadingSettlements = true;
+  bool _loadingWithdrawals = true;
+  double _overallBalance = 0;
+
+  final _withdrawalService = CashWithdrawalService();
+
+  // Filter state for withdrawals
+  int _filterMonth = DateTime.now().month;
+  int _filterYear = DateTime.now().year;
 
   @override
   void initState() {
     super.initState();
-    _tabCtrl = TabController(length: 2, vsync: this);
+    _tabCtrl = TabController(length: 4, vsync: this);
+    _tabCtrl.addListener(() {
+      // Force rebuild when tab changes to ensure content loads
+      if (!_tabCtrl.indexIsChanging) {
+        setState(() {});
+      }
+    });
     _loadData();
   }
 
@@ -28,7 +45,7 @@ class _PettyCashScreenState extends State<PettyCashScreen> with SingleTickerProv
   void dispose() { _tabCtrl.dispose(); super.dispose(); }
 
   Future<void> _loadData() async {
-    await Future.wait([_loadAssignments(), _loadSettlements()]);
+    await Future.wait([_loadAssignments(), _loadSettlements(), _loadWithdrawals(), _loadBalance()]);
   }
 
   Future<void> _loadAssignments() async {
@@ -62,11 +79,44 @@ class _PettyCashScreenState extends State<PettyCashScreen> with SingleTickerProv
     }
   }
 
+  Future<void> _loadWithdrawals() async {
+    setState(() => _loadingWithdrawals = true);
+    try {
+      final data = await _withdrawalService.getAll();
+      setState(() {
+        _withdrawals = data;
+        _loadingWithdrawals = false;
+      });
+    } catch (_) {
+      setState(() => _loadingWithdrawals = false);
+    }
+  }
+
+  Future<void> _loadBalance() async {
+    try {
+      final r = await apiClient.get('/petty-cash/balance');
+      setState(() => _overallBalance = (double.tryParse(r.data['balance']?.toString() ?? '0') ?? 0));
+    } catch (_) {}
+  }
+
+  List<Map<String, dynamic>> get _filteredWithdrawals {
+    return _withdrawals.where((w) {
+      final dateStr = w['withdrawalDate']?.toString();
+      if (dateStr == null) return false;
+      final date = DateTime.tryParse(dateStr);
+      if (date == null) return false;
+      return date.month == _filterMonth && date.year == _filterYear;
+    }).toList();
+  }
+
   String _fmtDate(String? d) => d == null ? '-' : d.split('T').first;
   String _fmtCurrency(dynamic v) => (double.tryParse(v?.toString() ?? '') ?? 0).toStringAsFixed(2);
 
   @override
   Widget build(BuildContext context) {
+    final user = context.read<AuthProvider>().user;
+    final isAdmin = ['Admin', 'Super Admin'].contains(user?.role);
+
     return Column(children: [
       Material(
         color: Colors.white,
@@ -75,19 +125,25 @@ class _PettyCashScreenState extends State<PettyCashScreen> with SingleTickerProv
           labelColor: const Color(0xFF1D6FA4),
           unselectedLabelColor: const Color(0xFF6B7280),
           indicatorColor: const Color(0xFF1D6FA4),
-          labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          labelStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+          isScrollable: false,
           tabs: const [
             Tab(text: 'Assignments'),
-            Tab(text: 'Cash Balance'),
+            Tab(text: 'Balance'),
+            Tab(text: 'Deposits'),
+            Tab(text: 'Expenses'),
           ],
         ),
       ),
       Expanded(
         child: TabBarView(
           controller: _tabCtrl,
+          physics: const NeverScrollableScrollPhysics(),
           children: [
             _buildAssignmentsTab(),
             _buildSettlementsTab(),
+            _buildWithdrawalsTab(isAdmin),
+            const ExpensesScreen(),
           ],
         ),
       ),
@@ -252,7 +308,6 @@ class _PettyCashScreenState extends State<PettyCashScreen> with SingleTickerProv
         Row(children: [
           Text(_fmtDate(s['requestDate']?.toString()), style: TextStyle(fontSize: 11, color: Colors.grey[500])),
           const Spacer(),
-          // Manager actions for pending settlements
           if (isManager && status.toUpperCase() == 'PENDING') ...[
             _actionBtn('Approve', Colors.green, () => _approveSettlement(s['settlementId'])),
             const SizedBox(width: 6),
@@ -262,6 +317,451 @@ class _PettyCashScreenState extends State<PettyCashScreen> with SingleTickerProv
       ]),
     );
   }
+
+  // ── Deposits & Withdrawals Tab ──────────────────────────────────────────────
+  Widget _buildWithdrawalsTab(bool isAdmin) {
+    if (_loadingWithdrawals) return const Center(child: CircularProgressIndicator());
+
+    final filtered = _filteredWithdrawals;
+    final totalWithdrawals = filtered
+        .where((w) => (w['transactionType'] ?? 'withdrawal') == 'withdrawal')
+        .fold<double>(0, (sum, w) => sum + (double.tryParse(w['amount']?.toString() ?? '0') ?? 0));
+    final totalDeposits = filtered
+        .where((w) => w['transactionType'] == 'deposit')
+        .fold<double>(0, (sum, w) => sum + (double.tryParse(w['amount']?.toString() ?? '0') ?? 0));
+
+    return RefreshIndicator(
+      onRefresh: () async {
+        await _loadWithdrawals();
+        await _loadBalance();
+      },
+      child: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          // Balance card
+          _buildBalanceSummaryCard(totalWithdrawals, totalDeposits),
+          const SizedBox(height: 12),
+          // Month/Year filter
+          _buildMonthFilter(),
+          const SizedBox(height: 12),
+          // Add button (Admin/Super Admin only)
+          if (isAdmin) ...[
+            _buildRecordButton(),
+            const SizedBox(height: 12),
+          ],
+          // List of transactions
+          if (filtered.isEmpty)
+            _buildEmptyState()
+          else
+            ...filtered.map((w) => _buildWithdrawalCard(w)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBalanceSummaryCard(double totalWithdrawals, double totalDeposits) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF1D6FA4), Color(0xFF2E8BC0)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Petty Cash Balance', style: TextStyle(fontSize: 11, color: Colors.white70)),
+        const SizedBox(height: 4),
+        Text('LKR ${_fmtCurrency(_overallBalance)}',
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: Colors.white)),
+        const SizedBox(height: 12),
+        Row(children: [
+          Expanded(child: _summaryChip(
+            icon: Icons.arrow_downward_rounded,
+            label: 'Withdrawals',
+            value: totalWithdrawals,
+            color: const Color(0xFF10B981),
+          )),
+          const SizedBox(width: 10),
+          Expanded(child: _summaryChip(
+            icon: Icons.arrow_upward_rounded,
+            label: 'Deposits',
+            value: totalDeposits,
+            color: const Color(0xFFF59E0B),
+          )),
+        ]),
+      ]),
+    );
+  }
+
+  Widget _summaryChip({required IconData icon, required String label, required double value, required Color color}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 6),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(label, style: const TextStyle(fontSize: 9, color: Colors.white70)),
+          Text('LKR ${_fmtCurrency(value)}',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white)),
+        ])),
+      ]),
+    );
+  }
+
+  Widget _buildMonthFilter() {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      child: Row(children: [
+        const Icon(Icons.filter_list, size: 16, color: Color(0xFF6B7280)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<int>(
+              value: _filterMonth,
+              isDense: true,
+              style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
+              items: List.generate(12, (i) => DropdownMenuItem(value: i + 1, child: Text(months[i]))),
+              onChanged: (v) { if (v != null) setState(() => _filterMonth = v); },
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<int>(
+              value: _filterYear,
+              isDense: true,
+              style: const TextStyle(fontSize: 13, color: Color(0xFF374151)),
+              items: List.generate(5, (i) {
+                final y = DateTime.now().year - 2 + i;
+                return DropdownMenuItem(value: y, child: Text('$y'));
+              }),
+              onChanged: (v) { if (v != null) setState(() => _filterYear = v); },
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildRecordButton() {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        onPressed: _showRecordDialog,
+        icon: const Icon(Icons.add, size: 18),
+        label: const Text('Record Transaction', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF1D6FA4),
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 40),
+      child: Center(child: Column(children: [
+        Icon(Icons.account_balance_outlined, size: 48, color: Colors.grey[300]),
+        const SizedBox(height: 8),
+        Text('No transactions for this month', style: TextStyle(color: Colors.grey[500], fontSize: 13)),
+      ])),
+    );
+  }
+
+  Widget _buildWithdrawalCard(Map<String, dynamic> w) {
+    final type = w['transactionType']?.toString() ?? 'withdrawal';
+    final isDeposit = type == 'deposit';
+    final amount = double.tryParse(w['amount']?.toString() ?? '0') ?? 0;
+    final bankName = w['bankName']?.toString() ?? '-';
+    final date = _fmtDate(w['withdrawalDate']?.toString());
+    final notes = w['notes']?.toString() ?? '';
+    final createdByName = w['createdByName']?.toString() ?? w['createdBy']?.toString() ?? '-';
+    final wId = w['withdrawalId']?.toString() ?? '-';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+      ),
+      padding: const EdgeInsets.all(12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: isDeposit ? const Color(0xFFFEF3C7) : const Color(0xFFD1FAE5),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Icon(
+              isDeposit ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+              size: 16,
+              color: isDeposit ? const Color(0xFFD97706) : const Color(0xFF059669),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(isDeposit ? 'Deposit' : 'Withdrawal',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            Text(bankName, style: TextStyle(fontSize: 11, color: Colors.grey[500])),
+          ])),
+          Text('LKR ${_fmtCurrency(amount)}',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700,
+                  color: isDeposit ? const Color(0xFFD97706) : const Color(0xFF059669))),
+        ]),
+        const SizedBox(height: 8),
+        Row(children: [
+          Text(wId, style: TextStyle(fontSize: 10, color: Colors.grey[400], fontFamily: 'monospace')),
+          const Spacer(),
+          Text(date, style: TextStyle(fontSize: 11, color: Colors.grey[500])),
+        ]),
+        if (notes.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(notes, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+        ],
+        const SizedBox(height: 4),
+        Text('Recorded by: $createdByName', style: TextStyle(fontSize: 10, color: Colors.grey[400])),
+      ]),
+    );
+  }
+
+  // ── Record Transaction Dialog ───────────────────────────────────────────────
+  void _showRecordDialog() {
+    final formKey = GlobalKey<FormState>();
+    String transactionType = 'withdrawal';
+    final amountCtrl = TextEditingController();
+    String bankName = '';
+    final dateCtrl = TextEditingController(text: DateTime.now().toIso8601String().split('T').first);
+    final notesCtrl = TextEditingController();
+    bool submitting = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) {
+          return Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            padding: EdgeInsets.only(
+              left: 20, right: 20, top: 20,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+            ),
+            child: Form(
+              key: formKey,
+              child: SingleChildScrollView(child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header
+                  Row(children: [
+                    const Text('Record Transaction',
+                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+                    const Spacer(),
+                    IconButton(
+                      icon: const Icon(Icons.close, size: 20),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ]),
+                  const SizedBox(height: 16),
+                  // Transaction Type
+                  const Text('Transaction Type', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(child: _typeOption(
+                      label: 'Withdrawal',
+                      icon: Icons.arrow_downward_rounded,
+                      selected: transactionType == 'withdrawal',
+                      color: const Color(0xFF059669),
+                      onTap: () => setModalState(() => transactionType = 'withdrawal'),
+                    )),
+                    const SizedBox(width: 10),
+                    Expanded(child: _typeOption(
+                      label: 'Deposit',
+                      icon: Icons.arrow_upward_rounded,
+                      selected: transactionType == 'deposit',
+                      color: const Color(0xFFD97706),
+                      onTap: () => setModalState(() => transactionType = 'deposit'),
+                    )),
+                  ]),
+                  const SizedBox(height: 16),
+
+                  // Amount
+                  TextFormField(
+                    controller: amountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Amount *',
+                      prefixText: 'LKR ',
+                      isDense: true,
+                    ),
+                    validator: (v) {
+                      if (v == null || v.isEmpty) return 'Required';
+                      final n = double.tryParse(v);
+                      if (n == null || n <= 0) return 'Enter a valid amount';
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Bank Name
+                  DropdownButtonFormField<String>(
+                    decoration: const InputDecoration(labelText: 'Bank Name *', isDense: true),
+                    items: const [
+                      DropdownMenuItem(value: 'Commercial Bank', child: Text('Commercial Bank')),
+                      DropdownMenuItem(value: 'Hatton National Bank', child: Text('Hatton National Bank')),
+                      DropdownMenuItem(value: 'Sampath Bank', child: Text('Sampath Bank')),
+                    ],
+                    onChanged: (v) => setModalState(() => bankName = v ?? ''),
+                    validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Date
+                  TextFormField(
+                    controller: dateCtrl,
+                    readOnly: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Transaction Date *',
+                      suffixIcon: Icon(Icons.calendar_today, size: 18),
+                      isDense: true,
+                    ),
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        initialDate: DateTime.now(),
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime.now().add(const Duration(days: 1)),
+                      );
+                      if (picked != null) {
+                        setModalState(() => dateCtrl.text = picked.toIso8601String().split('T').first);
+                      }
+                    },
+                    validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Notes
+                  TextFormField(
+                    controller: notesCtrl,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'Notes (optional)',
+                      isDense: true,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+
+                  // Submit
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: submitting ? null : () async {
+                        if (!formKey.currentState!.validate()) return;
+                        setModalState(() => submitting = true);
+                        try {
+                          await _withdrawalService.create(
+                            amount: double.parse(amountCtrl.text),
+                            bankName: bankName,
+                            withdrawalDate: dateCtrl.text,
+                            transactionType: transactionType,
+                            notes: notesCtrl.text.trim(),
+                          );
+                          if (ctx.mounted) Navigator.pop(ctx);
+                          _loadWithdrawals();
+                          _loadBalance();
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                              content: Text('${transactionType == 'deposit' ? 'Deposit' : 'Withdrawal'} recorded'),
+                              backgroundColor: const Color(0xFF059669),
+                            ));
+                          }
+                        } catch (e) {
+                          setModalState(() => submitting = false);
+                          if (ctx.mounted) {
+                            ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                              content: Text(e is DioException
+                                  ? (e.response?.data?['message'] ?? 'Failed to record')
+                                  : 'Failed to record'),
+                              backgroundColor: Colors.red,
+                            ));
+                          }
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: transactionType == 'deposit'
+                            ? const Color(0xFFD97706) : const Color(0xFF059669),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: submitting
+                          ? const SizedBox(height: 18, width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : Text(
+                              'Record ${transactionType == 'deposit' ? 'Deposit' : 'Withdrawal'}',
+                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                            ),
+                    ),
+                  ),
+                ],
+              )),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _typeOption({
+    required String label,
+    required IconData icon,
+    required bool selected,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: selected ? color.withValues(alpha: 0.1) : const Color(0xFFF9FAFB),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: selected ? color : const Color(0xFFE5E7EB), width: selected ? 2 : 1),
+        ),
+        child: Column(children: [
+          Icon(icon, color: selected ? color : Colors.grey, size: 20),
+          const SizedBox(height: 4),
+          Text(label, style: TextStyle(
+            fontSize: 12, fontWeight: FontWeight.w600,
+            color: selected ? color : Colors.grey[600],
+          )),
+        ]),
+      ),
+    );
+  }
+
+  // ── Shared Helpers ──────────────────────────────────────────────────────────
 
   Widget _actionBtn(String label, Color color, VoidCallback onTap) {
     return GestureDetector(

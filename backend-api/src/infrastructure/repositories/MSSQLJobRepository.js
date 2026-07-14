@@ -501,6 +501,39 @@ class MSSQLJobRepository extends IJobRepository {
       console.log('Could not fetch assigned users:', e.message);
     }
 
+    // Petty Cash Assignments
+    let assignments = [];
+    try {
+      console.log('mapToEntity - Fetching petty cash assignments for jobId:', jobId);
+      const container = require('../../infrastructure/di/container');
+      const pettyCashAssignmentRepository = container.get('pettyCashAssignmentRepository');
+      const pettyCashAssignments = await pettyCashAssignmentRepository.getAllByJob(jobId);
+      
+      console.log('mapToEntity - Found petty cash assignments:', pettyCashAssignments.length);
+      
+      assignments = pettyCashAssignments.map(pa => {
+        const mapped = {
+          pettyAssignmentId: pa.assignmentId,
+          userId: pa.assignedTo,
+          userName: pa.assignedToName,
+          waff_clerk_name: pa.assignedToName,
+          assignedAmount: parseFloat(pa.assignedAmount || 0),
+          settledAmount: parseFloat(pa.actualSpent || 0),
+          status: pa.status,
+          groupId: pa.groupId,
+          assignedDate: pa.assignedDate,
+          notes: pa.notes,
+        };
+        console.log('mapToEntity - Mapped assignment:', mapped);
+        return mapped;
+      });
+      
+      console.log('mapToEntity - Final assignments array:', assignments);
+    } catch (e) {
+      console.log('Could not fetch petty cash assignments:', e.message);
+      console.error('Full error:', e);
+    }
+
     // Metadata
     let metadataFromJson = {};
     try {
@@ -543,6 +576,7 @@ class MSSQLJobRepository extends IJobRepository {
       status:                   row.Status || 'Open',
       assignedTo:               row.AssignedTo,
       assignedUsers,
+      assignments,
       createdDate:              row.createdDate        || row.CreatedDate,
       completedDate:            row.completedDate      || row.CompletedDate,
       pettyCashStatus:          row.pettyCashStatus,
