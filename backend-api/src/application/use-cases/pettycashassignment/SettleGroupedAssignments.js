@@ -14,29 +14,44 @@ class SettleGroupedAssignments {
       throw new Error('No assignments found for this group');
     }
 
-    // Settle all assignments in the group.
-    // Important: To avoid duplicating custom items in the combined view, 
-    // we should only attach custom items to ONE assignment in the group (the main one or the first one),
-    // while predefined items are synced across all.
+    // Calculate group totals
+    const totalAssigned = groupAssignments.reduce((sum, a) => sum + parseFloat(a.assignedAmount || 0), 0);
+    const totalSpent = (settlementData.items || []).reduce((sum, item) => sum + parseFloat(item.actualCost || 0), 0);
+
+    // Determine group-level status based on total amounts
+    let groupStatus = 'Settled';
+    if (totalSpent === 0 && totalAssigned > 0) {
+      groupStatus = 'Full Petty Cash Returned';
+    } else if (totalAssigned > totalSpent) {
+      groupStatus = 'Balance To Be Return';
+    } else if (totalSpent > totalAssigned) {
+      groupStatus = 'Over Due';
+    }
+
+    // Settle the FIRST assignment with all items, set others to same status with 0 items
     const results = [];
     const mainAssignmentId = groupAssignments[0].assignmentId;
 
     for (let i = 0; i < groupAssignments.length; i++) {
       const assignment = groupAssignments[i];
-      // Filter settlement data for this assignment
-      const assignmentSettlementData = {
-        ...settlementData,
-        // Only include custom items for the first assignment in the group to avoid duplication
-        items: settlementData.items.filter(item => 
-          !(item.isCustomItem || item.isCustom) || i === 0
-        )
-      };
-
-      const result = await this.pettyCashAssignmentRepository.settle(
-        assignment.assignmentId,
-        assignmentSettlementData
-      );
-      results.push(result);
+      
+      if (i === 0) {
+        // First assignment gets all the items
+        const result = await this.pettyCashAssignmentRepository.settle(
+          assignment.assignmentId,
+          settlementData,
+          { overrideStatus: groupStatus, groupTotalAssigned: totalAssigned }
+        );
+        results.push(result);
+      } else {
+        // Other assignments get settled with empty items but same status
+        const result = await this.pettyCashAssignmentRepository.settle(
+          assignment.assignmentId,
+          { items: [] },
+          { overrideStatus: groupStatus, groupTotalAssigned: totalAssigned }
+        );
+        results.push(result);
+      }
     }
 
     return results;

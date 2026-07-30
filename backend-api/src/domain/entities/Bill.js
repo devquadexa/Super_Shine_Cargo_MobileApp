@@ -130,7 +130,7 @@ class Bill {
     }
     this.paymentStatus = 'Paid';
     this.paidDate = paymentDetails.paidDate ? new Date(paymentDetails.paidDate) : new Date();
-    this.paidAmount = parseFloat(this.netTotal) || parseFloat(this.total) || 0;
+    this.paidAmount = parseFloat(this.netTotal) || parseFloat(this.billingAmount) || parseFloat(this.grossTotal) || parseFloat(this.total) || 0;
     this.remainingAmount = 0;
     if (paymentDetails.paymentMethod) this.paymentMethod = paymentDetails.paymentMethod;
     if (paymentDetails.chequeNumber) this.chequeNumber = paymentDetails.chequeNumber;
@@ -147,7 +147,7 @@ class Bill {
     if (!amount || amount <= 0) throw new Error('Payment amount must be greater than zero');
 
     const currentPaid = parseFloat(this.paidAmount) || 0;
-    const invoiceTotal = parseFloat(this.netTotal) || parseFloat(this.total) || 0;
+    const invoiceTotal = parseFloat(this.netTotal) || parseFloat(this.billingAmount) || parseFloat(this.grossTotal) || parseFloat(this.total) || 0;
     const newPaidAmount = currentPaid + amount;
 
     if (newPaidAmount > invoiceTotal) {

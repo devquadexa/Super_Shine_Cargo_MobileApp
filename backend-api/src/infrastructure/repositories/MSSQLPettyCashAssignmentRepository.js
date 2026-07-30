@@ -172,7 +172,7 @@ class MSSQLPettyCashAssignmentRepository extends IPettyCashAssignmentRepository 
     }
   }
 
-  async settle(assignmentId, settlementData) {
+  async settle(assignmentId, settlementData, options = {}) {
     try {
       console.log('=== SETTLE START ===');
       const pool = await this.getConnection();
@@ -276,6 +276,11 @@ class MSSQLPettyCashAssignmentRepository extends IPettyCashAssignmentRepository 
           newStatus = 'Balance To Be Return';
         } else if (overAmount > 0) {
           newStatus = 'Over Due';
+        }
+
+        // Allow group settle to override status based on group totals
+        if (options.overrideStatus) {
+          newStatus = options.overrideStatus;
         }
 
         console.log('settle - status:', newStatus, '| actualSpent:', actualSpent, '| balance:', balanceAmount, '| over:', overAmount);

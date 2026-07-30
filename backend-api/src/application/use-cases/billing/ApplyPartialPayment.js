@@ -24,7 +24,7 @@ class ApplyPartialPayment {
       throw new Error('Payment amount must be greater than zero');
     }
 
-    const invoiceTotal = parseFloat(bill.netTotal || bill.total || 0);
+    const invoiceTotal = parseFloat(bill.netTotal) || parseFloat(bill.billingAmount) || parseFloat(bill.grossTotal) || parseFloat(bill.total) || 0;
     const currentPaid = parseFloat(bill.paidAmount) || 0;
     const remaining = invoiceTotal - currentPaid;
 

@@ -37,21 +37,29 @@ class GetAccountingDashboard {
       const jobBills = bills.filter(b => b.jobId === job.jobId);
       const bill = jobBills.length > 0 ? jobBills[0] : null;
       
-      // Get petty cash for this job
-      const pettyCash = pettyCashAssignments.find(pc => pc.jobId === job.jobId);
+      // Get ALL petty cash assignments for this job (not just the first one)
+      const jobPettyCash = pettyCashAssignments.filter(pc => pc.jobId === job.jobId);
+      const totalPettyCashIssued = jobPettyCash.reduce((sum, pc) => sum + (parseFloat(pc.assignedAmount || pc.amount || 0)), 0);
       
       // Calculate actual cost from pay items
       const actualCost = job.payItems ? 
         job.payItems.reduce((sum, item) => sum + (parseFloat(item.actualCost) || 0), 0) : 0;
       
-      // Calculate billing amount
-      const billingAmount = bill ? parseFloat(bill.billingAmount || 0) : 0;
+      // Calculate billing amount (use netTotal which accounts for advance payments, fallback to billingAmount)
+      const billingAmount = bill ? (parseFloat(bill.netTotal) || parseFloat(bill.billingAmount) || parseFloat(bill.amount) || 0) : 0;
+      
+      // Amount already paid
+      const paidAmount = bill ? (parseFloat(bill.paidAmount) || 0) : 0;
+      
+      // Remaining outstanding for this bill
+      const remainingAmount = billingAmount - paidAmount;
       
       // Calculate profit
       const profit = billingAmount - actualCost;
       
       // Payment status
       const isPaid = bill ? bill.paymentStatus === 'Paid' : false;
+      const isPartiallyPaid = bill ? bill.paymentStatus === 'Partially Paid' : false;
       const isOverdue = bill ? bill.isOverdue : false;
       
       // Calculate overdue days
@@ -73,11 +81,14 @@ class GetAccountingDashboard {
         customerName: customer ? customer.name : job.customerId,
         openDate: job.openDate,
         status: job.status,
-        pettyCashIssued: pettyCash ? parseFloat(pettyCash.amount || 0) : 0,
+        pettyCashIssued: totalPettyCashIssued,
         actualCost: actualCost,
         billingAmount: billingAmount,
+        paidAmount: paidAmount,
+        remainingAmount: remainingAmount,
         profit: profit,
         isPaid: isPaid,
+        isPartiallyPaid: isPartiallyPaid,
         isOverdue: isOverdue,
         overdueDays: overdueDays,
         invoiceDate: bill ? bill.invoiceDate : null,
@@ -93,10 +104,11 @@ class GetAccountingDashboard {
       const customerJobs = jobFinancials.filter(j => j.customerId === customer.customerId);
       const unpaidJobs = customerJobs.filter(j => !j.isPaid && j.billingAmount > 0);
       
-      const totalOutstanding = unpaidJobs.reduce((sum, job) => sum + job.billingAmount, 0);
+      // Use remainingAmount (billing - paid) instead of full billingAmount
+      const totalOutstanding = unpaidJobs.reduce((sum, job) => sum + job.remainingAmount, 0);
       const overdueAmount = unpaidJobs
         .filter(j => j.isOverdue)
-        .reduce((sum, job) => sum + job.billingAmount, 0);
+        .reduce((sum, job) => sum + job.remainingAmount, 0);
       
       if (totalOutstanding > 0) {
         customerOutstanding[customer.customerId] = {
@@ -118,9 +130,9 @@ class GetAccountingDashboard {
       totalActualCost: jobFinancials.reduce((sum, j) => sum + j.actualCost, 0),
       totalBillingAmount: jobFinancials.reduce((sum, j) => sum + j.billingAmount, 0),
       totalProfit: jobFinancials.reduce((sum, j) => sum + j.profit, 0),
-      totalPaid: jobFinancials.filter(j => j.isPaid).reduce((sum, j) => sum + j.billingAmount, 0),
-      totalOutstanding: jobFinancials.filter(j => !j.isPaid).reduce((sum, j) => sum + j.billingAmount, 0),
-      totalOverdue: jobFinancials.filter(j => j.isOverdue).reduce((sum, j) => sum + j.billingAmount, 0),
+      totalPaid: jobFinancials.reduce((sum, j) => sum + j.paidAmount, 0),
+      totalOutstanding: jobFinancials.filter(j => !j.isPaid).reduce((sum, j) => sum + j.remainingAmount, 0),
+      totalOverdue: jobFinancials.filter(j => j.isOverdue).reduce((sum, j) => sum + j.remainingAmount, 0),
       paidJobsCount: jobFinancials.filter(j => j.isPaid).length,
       unpaidJobsCount: jobFinancials.filter(j => !j.isPaid && j.billingAmount > 0).length,
       overdueJobsCount: jobFinancials.filter(j => j.isOverdue).length

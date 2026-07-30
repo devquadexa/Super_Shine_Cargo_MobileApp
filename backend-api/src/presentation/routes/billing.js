@@ -74,6 +74,41 @@ router.put('/:id', auth, checkRole('Admin', 'Super Admin', 'Manager'), (req, res
   billingController.markAsPaid(req, res)
 );
 
+// Invoice Report Routes
+router.get('/report/invoices/export/pdf', auth, async (req, res) => {
+  try {
+    const { fromDate, toDate, status } = req.query;
+    const ExportInvoiceReportPDF = require('../../application/use-cases/billing/ExportInvoiceReportPDF');
+    const billRepository = container.get('billRepository');
+    const exportPDF = new ExportInvoiceReportPDF(billRepository);
+    const pdfBuffer = await exportPDF.execute(fromDate, toDate, status || 'All');
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=Invoice_Report_${fromDate}_to_${toDate}.pdf`);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error('Error generating invoice report PDF:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/report/invoices/export/excel', auth, async (req, res) => {
+  try {
+    const { fromDate, toDate, status } = req.query;
+    const ExportInvoiceReportExcel = require('../../application/use-cases/billing/ExportInvoiceReportExcel');
+    const billRepository = container.get('billRepository');
+    const exportExcel = new ExportInvoiceReportExcel(billRepository);
+    const excelBuffer = await exportExcel.execute(fromDate, toDate, status || 'All');
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=Invoice_Report_${fromDate}_to_${toDate}.xlsx`);
+    res.send(excelBuffer);
+  } catch (error) {
+    console.error('Error generating invoice report Excel:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Pending Payments Report Routes
 router.get('/report/pending-payments', auth, async (req, res) => {
   try {

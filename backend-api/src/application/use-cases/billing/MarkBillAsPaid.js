@@ -76,7 +76,7 @@ class MarkBillAsPaid {
           billId: bill.billId,
           paymentMethod: paymentDetails.paymentMethod,
           paymentDate: paymentDetails.paidDate ? new Date(paymentDetails.paidDate) : new Date(),
-          amount: bill.netTotal || bill.total || bill.billingAmount, // Invoice amount
+          amount: parseFloat(bill.netTotal) || parseFloat(bill.billingAmount) || parseFloat(bill.grossTotal) || parseFloat(bill.total) || 0, // Invoice amount
           status: paymentDetails.paymentMethod === 'Cash' ? 'Cleared' : 'Pending',
           chequeNumber: paymentDetails.chequeNumber || null,
           chequeDate: paymentDetails.chequeDate || null,
