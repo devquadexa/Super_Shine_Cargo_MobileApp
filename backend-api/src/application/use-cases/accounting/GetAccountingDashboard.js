@@ -124,6 +124,8 @@ class GetAccountingDashboard {
     }
     
     // Calculate summary statistics
+    const unpaidJobs = jobFinancials.filter(j => !j.isPaid && !j.isPartiallyPaid && j.billingAmount > 0);
+    const partiallyPaidJobs = jobFinancials.filter(j => j.isPartiallyPaid);
     const summary = {
       totalJobs: jobs.length,
       totalPettyCashIssued: jobFinancials.reduce((sum, j) => sum + j.pettyCashIssued, 0),
@@ -131,10 +133,12 @@ class GetAccountingDashboard {
       totalBillingAmount: jobFinancials.reduce((sum, j) => sum + j.billingAmount, 0),
       totalProfit: jobFinancials.reduce((sum, j) => sum + j.profit, 0),
       totalPaid: jobFinancials.reduce((sum, j) => sum + j.paidAmount, 0),
-      totalOutstanding: jobFinancials.filter(j => !j.isPaid).reduce((sum, j) => sum + j.remainingAmount, 0),
+      totalOutstanding: unpaidJobs.reduce((sum, j) => sum + j.remainingAmount, 0),
+      totalPartiallyPaid: partiallyPaidJobs.reduce((sum, j) => sum + j.remainingAmount, 0),
       totalOverdue: jobFinancials.filter(j => j.isOverdue).reduce((sum, j) => sum + j.remainingAmount, 0),
       paidJobsCount: jobFinancials.filter(j => j.isPaid).length,
-      unpaidJobsCount: jobFinancials.filter(j => !j.isPaid && j.billingAmount > 0).length,
+      unpaidJobsCount: unpaidJobs.length,
+      partiallyPaidJobsCount: partiallyPaidJobs.length,
       overdueJobsCount: jobFinancials.filter(j => j.isOverdue).length
     };
     

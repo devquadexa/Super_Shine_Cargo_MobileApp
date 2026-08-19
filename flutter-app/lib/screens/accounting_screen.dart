@@ -134,6 +134,10 @@ class _AccountingScreenState extends State<AccountingScreen> with SingleTickerPr
             Expanded(child: _miniCard('Paid', '${s['paidJobsCount'] ?? 0}', _fmtCurrency(s['totalPaid']), const Color(0xFF059669))),
             const SizedBox(width: 8),
             Expanded(child: _miniCard('Unpaid', '${s['unpaidJobsCount'] ?? 0}', _fmtCurrency(s['totalOutstanding']), const Color(0xFFD97706))),
+          ]),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(child: _miniCard('Partially Paid', '${s['partiallyPaidJobsCount'] ?? 0}', _fmtCurrency(s['totalPartiallyPaid']), const Color(0xFF2563EB))),
             const SizedBox(width: 8),
             Expanded(child: _miniCard('Overdue', '${s['overdueJobsCount'] ?? 0}', _fmtCurrency(s['totalOverdue']), const Color(0xFFEF4444))),
           ]),
